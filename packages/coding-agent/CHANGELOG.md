@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed compiled plugin installs failing to load dependencies of Pi package subpaths supplied by the plugin, such as `@oh-my-pi/pi-utils/dirs`.
+
 ## [18.4.1] - 2026-09-28
 
 ### Changed

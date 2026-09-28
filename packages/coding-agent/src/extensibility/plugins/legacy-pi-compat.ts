@@ -1095,6 +1095,17 @@ function resolveCanonicalPiSpecifier(remappedSpecifier: string): string {
 	return getResolvedSpecifier(remappedSpecifier);
 }
 
+/** Resolve host-owned Pi imports, leaving unavailable subpaths to the extension's installed peer package. */
+function resolveLegacyPiHostSpecifier(specifier: string): string | null {
+	const remappedSpecifier = remapLegacyPiSpecifier(specifier);
+	if (!remappedSpecifier) return null;
+	try {
+		return resolveCanonicalPiSpecifier(remappedSpecifier);
+	} catch {
+		return null;
+	}
+}
+
 function toImportSpecifier(resolvedPath: string): string {
 	// Virtual `omp-legacy-pi-bundled:` specifiers are served by the synthetic
 	// onLoad in `installLegacyPiSpecifierShim()`; wrapping them as `file://`
@@ -1139,14 +1150,9 @@ async function rewriteLegacyExtensionSource(
 
 		const specifier = reference.specifier;
 		let replacement: string | null = null;
-		const remappedSpecifier = remapLegacyPiSpecifier(specifier);
-		if (remappedSpecifier) {
-			try {
-				replacement = toImportSpecifier(resolveCanonicalPiSpecifier(remappedSpecifier));
-			} catch {
-				// Compiled fallback may be absent from a malformed build. Continue to
-				// the extension's on-disk peer dependency resolution below.
-			}
+		const hostSpecifier = resolveLegacyPiHostSpecifier(specifier);
+		if (hostSpecifier) {
+			replacement = toImportSpecifier(hostSpecifier);
 		}
 		if (!replacement && TYPEBOX_SHIM_PATH && (specifier === "typebox" || specifier === "@sinclair/typebox")) {
 			replacement = toImportSpecifier(TYPEBOX_SHIM_PATH);
@@ -1866,29 +1872,20 @@ async function resolveExtensionCommonJsRequire(specifier: string, importerPath: 
 	if (specifier.startsWith(".")) {
 		return resolveRelativeCommonJsRequire(specifier, importerPath);
 	}
-	const remappedSpecifier = remapLegacyPiSpecifier(specifier);
-	if (remappedSpecifier) {
-		let resolved: string | null = null;
-		try {
-			resolved = resolveCanonicalPiSpecifier(remappedSpecifier);
-		} catch {
-			// A malformed compiled registry can still fall through to an
-			// extension-installed legacy peer dependency.
-		}
-		if (resolved) {
-			if (isBundledVirtualSpecifier(resolved)) {
-				const moduleKey = resolved.slice(BUNDLED_VIRTUAL_SCHEME.length);
-				if (!(moduleKey in loadedBundledModules)) {
-					await loadBundledModule(moduleKey);
-				}
-			} else {
-				// Object-loader callbacks evaluate CommonJS during module linking,
-				// before sibling ESM imports execute. Prime host-owned ESM shims so
-				// the synchronous evaluator can require their namespace.
-				await import(toImportSpecifier(resolved));
+	const resolved = resolveLegacyPiHostSpecifier(specifier);
+	if (resolved) {
+		if (isBundledVirtualSpecifier(resolved)) {
+			const moduleKey = resolved.slice(BUNDLED_VIRTUAL_SCHEME.length);
+			if (!(moduleKey in loadedBundledModules)) {
+				await loadBundledModule(moduleKey);
 			}
-			return resolved;
+		} else {
+			// Object-loader callbacks evaluate CommonJS during module linking,
+			// before sibling ESM imports execute. Prime host-owned ESM shims so
+			// the synchronous evaluator can require their namespace.
+			await import(toImportSpecifier(resolved));
 		}
+		return resolved;
 	}
 	return resolveExtensionBareRequire(specifier, importerPath);
 }
@@ -2244,7 +2241,7 @@ async function collectExtensionModules(entryRealPath: string): Promise<Extension
 					}
 				} else if (
 					isBareExtensionDependencySpecifier(specifier) &&
-					!remapLegacyPiSpecifier(specifier) &&
+					!resolveLegacyPiHostSpecifier(specifier) &&
 					specifier !== "typebox" &&
 					specifier !== "@sinclair/typebox"
 				) {
